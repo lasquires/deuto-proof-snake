@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Snake — Color-Vision Grid (Blocks, scalable)</title>
+  <style>
+    :root{
+      --bg:#ffffff;
+      --o1:#CF7F53; --o2:#D7936B; --o3:#E2A378; --o4:#E6B38F; --o5:#EAC3A4; --o6:#D6AD89; --o7:#EFCEB1; --o8:#F9D9BC; --o9:#FBE4CA; --o10:#EED8BC; --o11:#FFF0D9; --o12:#D5C4A2; --o13:#FCF3DB; --o14:#F0ECD0; --o15:#A58462;
+      --g1:#B1C195; --g2:#D0ECC9; --g3:#78B585; --g4:#639B69; --g5:#4E8B5B;
+    }
+    html,body{ margin:0; height:100%; background:var(--bg); }
+    #hud{ position:fixed; top:10px; left:10px; right:10px; display:flex; gap:12px; align-items:center; font:600 14px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; color:#1f2937; z-index:2; flex-wrap:wrap; }
+    #hud .pill{ background:rgba(255,255,255,0.85); backdrop-filter:saturate(1.2) blur(6px); padding:8px 12px; border-radius:999px; box-shadow:0 10px 25px rgba(0,0,0,.08); }
+    #hud button, #hud input[type=range], #hud input[type=checkbox]{ font:inherit; border:1px solid #e5e7eb; background:#fff; padding:6px 8px; border-radius:10px; }
+    #hud button{ background:#111827; color:#fff; cursor:pointer; }
+    canvas{ width:100vw; height:100vh; display:block; background:#fff; }
+    /* menu toggle button */
+    #menuToggle{ position:fixed; top:10px; right:10px; z-index:3; padding:8px 12px; border-radius:999px; border:1px solid #e5e7eb; background:#ffffff; box-shadow:0 10px 25px rgba(0,0,0,.08); font:600 14px system-ui; cursor:pointer; }
+    /* hidden HUD state */
+    .hud-hidden #hud{ display:none; }
+    
+  </style>
+</head>
+<body>
+  <button id="menuToggle" aria-pressed="false" title="Hide/Show menu">Hide menu</button>
+  <div id="hud">
+    <span class="pill">Score: <span id="score">0</span></span>
+    <button id="restart">Restart</button>
+    <button id="fs">Fullscreen</button>
+    <label class="pill">Speed <input id="speed" type="range" min="0.01" max="2.0" step="0.01" value="0.30"></label>
+    <label class="pill">Start length <input id="startLen" type="range" min="3" max="30" step="1" value="8"></label>
+    <label class="pill">Block size <input id="blockSize" type="range" min="10" max="80" step="2" value="28"></label>
+    <label class="pill"><input type="checkbox" id="randSnake"> Randomize snake colors</label>
+    <label class="pill"><input type="checkbox" id="randBG" checked> Randomize background colors</label>
+    <label class="pill"><input type="checkbox" id="randFood" checked> Randomize food color</label>
+  </div>
+  
+  <canvas id="stage"></canvas>
+
+  <script>
+    // ===== Canvas & globals =====
+    const cv = document.getElementById('stage');
+    const ctx = cv.getContext('2d', { alpha:false });
+    let DPR = Math.max(1, window.devicePixelRatio || 1);
+    let W=0,H=0,CW=0,CH=0;
+
+    // Grid params
+    let cols=0, rows=0, cell=28, xOffset=0, yOffset=0;
+
+    // Palettes
+    const ORANGES = ['#CF7F53','#D7936B','#E2A378','#E6B38F','#EAC3A4','#D6AD89','#EFCEB1','#F9D9BC','#FBE4CA','#EED8BC','#FFF0D9','#D5C4A2','#FCF3DB','#F0ECD0','#A58462'];
+    const GREENS  = ['#B1C195','#D0ECC9','#78B585','#639B69'];
+    const DARK_GREENS = ['#78B585','#639B69','#4E8B5B'];
+    let foodColor = '#4E8B5B';
+
+    // State
+    let BG = [];
+    let snake = [];
+    let dir = {x:1,y:0}, nextDir = {x:1,y:0};
+    let food=null, score=0, alive=true;
+    let speedScale = 0.30;
+
+    // ===== Layout / sizing =====
+    function fit(){
+      DPR = Math.max(1, window.devicePixelRatio||1);
+      W = Math.floor(window.innerWidth);
+      H = Math.floor(window.innerHeight);
+      cv.style.width = W+'px';
+      cv.style.height = H+'px';
+      CW = Math.floor(W*DPR);
+      CH = Math.floor(H*DPR);
+      cv.width = CW; cv.height = CH;
+
+      const cellSlider = document.getElementById('blockSize');
+      cell = parseInt(cellSlider.value, 10) * DPR;
+      cols = Math.max(10, Math.floor(CW / cell));
+      rows = Math.max(10, Math.floor(CH / cell));
+
+      xOffset = Math.floor((CW - cols*cell)/2);
+      yOffset = Math.floor((CH - rows*cell)/2);
+      buildBackground();
+    }
+
+    function buildBackground(){
+      BG = new Array(rows);
+      for(let r=0;r<rows;r++){
+        BG[r] = new Array(cols);
+        for(let c=0;c<cols;c++){
+          BG[r][c] = ORANGES[(Math.random()*ORANGES.length)|0];
+        }
+      }
+    }
+
+    // ===== Rendering =====
+    function drawCell(r,c,fill){
+      const x = xOffset + c*cell;
+      const y = yOffset + r*cell;
+      ctx.fillStyle = fill;
+      ctx.fillRect(x, y, cell, cell);
+    }
+
+    function draw(){
+      const randSnake = document.getElementById('randSnake').checked;
+      const randBG = document.getElementById('randBG').checked;
+      const randFood = document.getElementById('randFood').checked;
+      if(randFood) foodColor = DARK_GREENS[(Math.random()*DARK_GREENS.length)|0];
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0,0,CW,CH);
+      for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
+        if(randBG) BG[r][c] = ORANGES[(Math.random()*ORANGES.length)|0];
+        drawCell(r,c,BG[r][c]);
+      }
+      if(food) drawCell(food.y, food.x, foodColor);
+      for(let i=0;i<snake.length;i++){
+        const color = randSnake ? GREENS[(Math.random()*GREENS.length)|0] : GREENS[i % GREENS.length];
+        drawCell(snake[i].y, snake[i].x, color);
+      }
+      if(!alive){
+        ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,0,CW,CH);
+        ctx.fillStyle='#fff'; ctx.font = `${Math.max(22*DPR, cell)}px system-ui`; ctx.textAlign='center';
+        ctx.fillText('Game over — Restart', CW/2, CH/2);
+      }
+    }
+
+    // ===== Game logic =====
+    function reset(){
+      score=0; alive=true; dir={x:1,y:0}; nextDir={x:1,y:0};
+      const sx=(cols/2)|0, sy=(rows/2)|0;
+      const len = parseInt(document.getElementById('startLen').value, 10);
+      snake=[]; for(let i=len-1;i>=0;i--) snake.push({x:sx-i,y:sy});
+      placeFood();
+      document.getElementById('score').textContent = score;
+      draw();
+    }
+
+    function placeFood(){
+      let x,y,fail; let tries=0;
+      do{
+        x = (Math.random()*cols)|0; y=(Math.random()*rows)|0; fail=false;
+        for(const s of snake) if(s.x===x&&s.y===y){fail=true; break;}
+      }while(fail&&tries++<1000);
+      food={x,y};
+    }
+
+    function step(){
+      if(!alive) return;
+      if(nextDir.x!==-dir.x || nextDir.y!==-dir.y) dir = nextDir;
+      const head=snake[snake.length-1];
+      const nx=head.x+dir.x, ny=head.y+dir.y;
+      if(nx<0||ny<0||nx>=cols||ny>=rows){alive=false;draw();return;}
+      for(const s of snake) if(s.x===nx&&s.y===ny){alive=false;draw();return;}
+      snake.push({x:nx,y:ny});
+      if(food&&nx===food.x&&ny===food.y){score++;document.getElementById('score').textContent=score;placeFood();}else snake.shift();
+      draw();
+    }
+
+    // ===== Input =====
+    // Keyboard
+    window.addEventListener('keydown', e=>{
+      const k=e.key.toLowerCase();
+      if(k===' '){buildBackground();reset();}
+      if(k==='arrowleft'||k==='a') nextDir={x:-1,y:0};
+      if(k==='arrowright'||k==='d') nextDir={x:1,y:0};
+      if(k==='arrowup'||k==='w') nextDir={x:0,y:-1};
+      if(k==='arrowdown'||k==='s') nextDir={x:0,y:1};
+    });
+
+    // Touch swipe (DECLARE ONCE)
+    let touchStart = null; // <-- single declaration
+    window.addEventListener('touchstart', e=>{
+      const t = e.touches[0];
+      touchStart = {x:t.clientX, y:t.clientY};
+    }, {passive:true});
+    window.addEventListener('touchmove', e=>{
+      if(!touchStart) return; const t=e.touches[0];
+      const dx=t.clientX-touchStart.x, dy=t.clientY-touchStart.y;
+      if(Math.hypot(dx,dy)>24){
+        if(Math.abs(dx)>Math.abs(dy)) nextDir = {x:Math.sign(dx),y:0};
+        else nextDir = {x:0,y:Math.sign(dy)};
+        touchStart=null; // one turn per swipe
+      }
+    }, {passive:true});
+    window.addEventListener('touchend', ()=>{ touchStart=null; }, {passive:true});
+
+    // Buttons & sliders
+    document.getElementById('fs').addEventListener('click', async ()=>{
+      const root=document.documentElement; if(!document.fullscreenElement){try{await root.requestFullscreen();}catch{}} else {try{await document.exitFullscreen();}catch{}}
+      setTimeout(()=>{fit();reset();},200);
+    });
+    document.getElementById('restart').addEventListener('click', ()=>{buildBackground();reset();});
+
+    const speedEl = document.getElementById('speed');
+    speedEl.addEventListener('input', ()=>{speedScale=parseFloat(speedEl.value);});
+    const blockEl = document.getElementById('blockSize');
+    blockEl.addEventListener('input', ()=>{fit();reset();});
+    const startEl = document.getElementById('startLen');
+    startEl.addEventListener('input', ()=>{reset();});
+
+    // Menu toggle (single button / no duplicate IDs)
+    const toggleBtn = document.getElementById('menuToggle');
+    function setMenuLabel(){ const hidden=document.body.classList.contains('hud-hidden'); toggleBtn.textContent = hidden? 'Show menu' : 'Hide menu'; toggleBtn.setAttribute('aria-pressed', hidden? 'true':'false'); }
+    toggleBtn.addEventListener('click', ()=>{ document.body.classList.toggle('hud-hidden'); setMenuLabel(); });
+
+    // ===== Loop =====
+    let inited=false,last=0,acc=0;
+    function loop(ts){
+      if(!inited){requestAnimationFrame(loop);return;}
+      if(!last) last=ts; const dt=ts-last; last=ts;
+      const interval=220*(1/Math.max(0.01,speedScale));
+      acc+=dt;
+      if(acc>=Math.max(30,interval)){acc=0;step();}
+      requestAnimationFrame(loop);
+    }
+
+    // ===== Self-tests =====
+    function selfTests(){
+      const tests = [
+        {test:'single #menuToggle', pass: document.querySelectorAll('#menuToggle').length === 1},
+        {test:'canvas sized', pass: CW>0 && CH>0, CW, CH},
+        {test:'grid defined', pass: rows>0 && cols>0, rows, cols, cell},
+        {test:'touchStart declared once', pass: typeof touchStart !== 'undefined'},
+        {test:'randBG default checked', pass: document.getElementById('randBG').checked === true},
+        {test:'randFood default checked', pass: document.getElementById('randFood').checked === true},
+      ];
+      console.table(tests);
+      console.assert(document.querySelectorAll('#menuToggle').length===1, 'There should be exactly one #menuToggle button');
+    }
+
+    // ===== Boot =====
+    function init(){
+      fit();
+      reset();
+      inited=true;
+      setMenuLabel();
+      selfTests();
+      requestAnimationFrame(loop);
+    }
+    if(document.readyState==='loading') window.addEventListener('DOMContentLoaded', init); else init();
+    window.addEventListener('resize', ()=>{fit();reset();});
+  </script>
+</body>
+</html>
